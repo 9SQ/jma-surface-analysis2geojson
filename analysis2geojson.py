@@ -4,15 +4,18 @@ import json
 import xml.etree.ElementTree as et
 from collections import defaultdict
 import datetime
+import re
 
 namespaces = {
     'jmx_ib': 'http://xml.kishou.go.jp/jmaxml1/informationBasis1/',
     'jmx_eb': 'http://xml.kishou.go.jp/jmaxml1/elementBasis1/',
     'jmx_ml': 'http://xml.kishou.go.jp/jmaxml1/body/meteorology1/'
-    }
+}
+
 
 def tag(namespace, element):
-    return '{' + namespaces[namespace]+ '}'+ element
+    return '{' + namespaces[namespace] + '}' + element
+
 
 class metinfo:
     def __init__(self, tree):
@@ -45,19 +48,25 @@ class metinfo:
                         kName = kind.text
                     elif kind.tag == tag('jmx_ml', 'Property'):
                         geometry = []
+                        geomSplit = []
                         geometryType = ""
                         properties = {}
                         for property_ in kind:
                             if property_.tag == tag('jmx_ml', 'Type'):
                                 properties.update({"type": property_.text})
-                            elif property_.tag == tag('jmx_ml', 'IsobarPart'):
+                            elif property_.tag == tag('jmx_ml', 'IsobarPart') or property_.tag == tag('jmx_ml', 'CoordinatePart'):
                                 for p in property_:
                                     if p.tag == tag('jmx_eb', 'Line'):
                                         geometryType = "LineString"
+                                        lastSign = ""
                                         for combined_coordinates in p.text.split("/"):
                                             if combined_coordinates:
-                                                divided_coordinates = combined_coordinates.split("+")
-                                                coordinates = [float(divided_coordinates[2]), float(divided_coordinates[1])]
+                                                divided_coordinates = re.split('(\-|\+)', combined_coordinates)
+                                                if lastSign and lastSign != divided_coordinates[3]:
+                                                    geomSplit.append(geometry)
+                                                    geometry = []
+                                                coordinates = [float(divided_coordinates[3]+divided_coordinates[4]), float(divided_coordinates[1]+divided_coordinates[2])]
+                                                lastSign = divided_coordinates[3]
                                                 geometry.append(coordinates)
                                     elif p.tag == tag('jmx_eb', 'Pressure'):
                                         properties.update({"pressure": p.text})
@@ -67,8 +76,8 @@ class metinfo:
                                         geometryType = "Point"
                                         for combined_coordinates in p.text.split("/"):
                                             if combined_coordinates:
-                                                divided_coordinates = combined_coordinates.split("+")
-                                                coordinates = [float(divided_coordinates[2]), float(divided_coordinates[1])]
+                                                divided_coordinates = re.split('(\-|\+)', combined_coordinates)
+                                                coordinates = [float(divided_coordinates[3]+divided_coordinates[4]), float(divided_coordinates[1]+divided_coordinates[2])]
                                                 geometry = coordinates
                                     elif p.tag == tag('jmx_eb', 'Pressure'):
                                         properties.update({"pressure": p.text})
@@ -80,27 +89,34 @@ class metinfo:
                                     elif p.tag == tag('jmx_eb', 'Speed') and p.get("unit") == "ノット":
                                         properties.update({"speed_kt": p.text})
                                         properties.update({"speed_kt_description": p.get("description")})
-                            elif property_.tag == tag('jmx_ml', 'CoordinatePart'):
-                                for p in property_:
-                                    if p.tag == tag('jmx_eb', 'Line'):
-                                        geometryType = "LineString"
-                                        for combined_coordinates in p.text.split("/"):
-                                            if combined_coordinates:
-                                                divided_coordinates = combined_coordinates.split("+")
-                                                coordinates = [float(divided_coordinates[2]), float(divided_coordinates[1])]
-                                                geometry.append(coordinates)
-                
-                        feature = {
-                            "geometry": {
-                                "type": geometryType,
-                                "coordinates": geometry
-                            },
-                            "type": "Feature",
-                            "properties": properties
-                        }
-                        features.append(feature)
-        self.featurecollection = {"type":"FeatureCollection","features":features}
+                        if len(geomSplit) > 0:
+                            for i in range(len(geomSplit)+1):
+                                if i == len(geomSplit):
+                                    geom = geometry
+                                else:
+                                    geom = geomSplit[i]
+                                feature = {
+                                    "geometry": {
+                                        "type": geometryType,
+                                        "coordinates": geom
+                                    },
+                                    "type": "Feature",
+                                    "properties": properties
+                                }
+                                features.append(feature)
+                        else:
+                            feature = {
+                                "geometry": {
+                                    "type": geometryType,
+                                    "coordinates": geometry
+                                },
+                                "type": "Feature",
+                                "properties": properties
+                            }
+                            features.append(feature)
+        self.featurecollection = {"type": "FeatureCollection", "features": features}
         self.geojson = json.dumps(self.featurecollection, ensure_ascii=False)
+
 
 if __name__ == '__main__':
     argvs = sys.argv
